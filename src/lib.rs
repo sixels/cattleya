@@ -13,12 +13,18 @@ pub struct ElfObfuscator {
     symbol: bool,
     comment: bool,
     section: Option<String>,
-    got: bool,
-    got_l: Option<String>,
-    got_f: Option<String>,
-    encrypt: bool,
-    encrypt_f: Option<String>,
-    encrypt_key: Option<String>,
+    got: Option<ElfObfuscationGotOverwrite>,
+    encrypt: Option<ElfObfuscationEncryptFunction>,
+}
+
+struct ElfObfuscationEncryptFunction {
+    func: String,
+    key: String,
+}
+
+struct ElfObfuscationGotOverwrite {
+    lib_func: String,
+    new_func: String,
 }
 
 impl ElfObfuscator {
@@ -30,12 +36,8 @@ impl ElfObfuscator {
             symbol: false,
             comment: false,
             section: None,
-            got: false,
-            got_l: None,
-            got_f: None,
-            encrypt: false,
-            encrypt_f: None,
-            encrypt_key: None,
+            got: None,
+            encrypt: None,
         }
     }
 }
@@ -78,9 +80,10 @@ impl ElfObfuscator {
         target_lib_func: impl Into<String>,
         new_func: impl Into<String>,
     ) -> Self {
-        self.got = true;
-        self.got_l = Some(target_lib_func.into());
-        self.got_f = Some(new_func.into());
+        self.got = Some(ElfObfuscationGotOverwrite {
+            lib_func: target_lib_func.into(),
+            new_func: new_func.into(),
+        });
         self
     }
 
@@ -90,9 +93,10 @@ impl ElfObfuscator {
         func: impl Into<String>,
         key: impl Into<String>,
     ) -> Self {
-        self.encrypt = true;
-        self.encrypt_f = Some(func.into());
-        self.encrypt_key = Some(key.into());
+        self.encrypt = Some(ElfObfuscationEncryptFunction {
+            func: func.into(),
+            key: key.into(),
+        });
         self
     }
 
@@ -118,23 +122,11 @@ impl ElfObfuscator {
         if let Some(section) = &self.section {
             obfuscator.nullify_section(section)?;
         }
-        if self.got {
-            let got_l = self.got_l.as_deref().ok_or(Error::InvalidOption(
-                "both library and function names are required",
-            ))?;
-            let got_f = self.got_f.as_deref().ok_or(Error::InvalidOption(
-                "both library and function names are required",
-            ))?;
-            obfuscator.got_overwrite(got_l, got_f)?;
+        if let Some(got) = &self.got {
+            obfuscator.got_overwrite(&got.lib_func, &got.new_func)?;
         }
-        if self.encrypt {
-            let func = self.encrypt_f.as_deref().ok_or(Error::InvalidOption(
-                "target function name and encryption key is required",
-            ))?;
-            let key = self.encrypt_key.as_deref().ok_or(Error::InvalidOption(
-                "target function name and encryption key is required",
-            ))?;
-            if !obfuscator.encrypt_function_name(func, key)? {
+        if let Some(encrypt) = &self.encrypt {
+            if !obfuscator.encrypt_function_name(&encrypt.func, &encrypt.key)? {
                 return Err(Error::FunctionNotFound);
             }
         }

@@ -1,11 +1,12 @@
+mod elf;
 mod error;
 mod obfus;
-mod util;
 
 pub use error::{Error, Result};
-pub use obfus::Obfuscator;
 
-pub struct ObfuscateBuilder<'a> {
+use crate::obfus::ObfuscatorMem;
+
+pub struct ElfObfuscator<'a> {
     input: &'a mut Vec<u8>,
     class: bool,
     endian: bool,
@@ -21,7 +22,7 @@ pub struct ObfuscateBuilder<'a> {
     encrypt_key: Option<String>,
 }
 
-impl<'a> ObfuscateBuilder<'a> {
+impl<'a> ElfObfuscator<'a> {
     pub fn new(input: &'a mut Vec<u8>) -> Self {
         Self {
             input,
@@ -41,25 +42,25 @@ impl<'a> ObfuscateBuilder<'a> {
     }
 }
 
-impl<'a> ObfuscateBuilder<'a> {
-    pub fn class(mut self, enable: bool) -> Self {
-        self.class = enable;
+impl<'a> ElfObfuscator<'a> {
+    pub fn swap_class(mut self) -> Self {
+        self.class = true;
         self
     }
-    pub fn endian(mut self, enable: bool) -> Self {
-        self.endian = enable;
+    pub fn swap_endian(mut self) -> Self {
+        self.endian = true;
         self
     }
-    pub fn nullify_section_headers(mut self, enable: bool) -> Self {
-        self.sechdr = enable;
+    pub fn nullify_section_headers(mut self) -> Self {
+        self.sechdr = true;
         self
     }
-    pub fn nullify_symbols(mut self, enable: bool) -> Self {
-        self.symbol = enable;
+    pub fn nullify_symbols(mut self) -> Self {
+        self.symbol = true;
         self
     }
-    pub fn nullify_comment(mut self, enable: bool) -> Self {
-        self.comment = enable;
+    pub fn nullify_comment(mut self) -> Self {
+        self.comment = true;
         self
     }
     pub fn nullify_section(mut self, name: impl Into<String>) -> Self {
@@ -102,9 +103,7 @@ impl<'a> ObfuscateBuilder<'a> {
 
     fn exec_obfus(&mut self) -> Result<()> {
         // Use in-memory obfuscator, no filesystem interaction.
-        let mut out = self.input.clone();
-        let mut obfuscator =
-            crate::obfus::ObfuscatorMem::from_bytes(self.input.as_slice(), out.as_mut_slice())?;
+        let mut obfuscator = ObfuscatorMem::new(self.input.as_mut_slice())?;
 
         if self.class {
             let _ = obfuscator.change_class();
@@ -133,18 +132,17 @@ impl<'a> ObfuscateBuilder<'a> {
             ))?;
             let _ = obfuscator.got_overwrite(got_l, got_f);
         }
-        // if self.encrypt {
-        //     let func = self.encrypt_f.as_deref().ok_or(Error::InvalidOption(
-        //         "target function name and encryption key is required",
-        //     ))?;
-        //     let key = self.encrypt_key.as_deref().ok_or(Error::InvalidOption(
-        //         "target function name and encryption key is required",
-        //     ))?;
-        //     let _ = obfuscator.encrypt_function_name(func, key);
-        // }
+        if self.encrypt {
+            let func = self.encrypt_f.as_deref().ok_or(Error::InvalidOption(
+                "target function name and encryption key is required",
+            ))?;
+            let key = self.encrypt_key.as_deref().ok_or(Error::InvalidOption(
+                "target function name and encryption key is required",
+            ))?;
+            let _ = obfuscator.encrypt_function_name(func, key);
+        }
 
         // Write back to caller's buffer
-        *self.input = out;
         Ok(())
     }
 }

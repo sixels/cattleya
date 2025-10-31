@@ -285,18 +285,18 @@ impl<'a> ObfuscatorMem<'a> {
             while cursor < section_size && data_copy[cursor] != 0 {
                 cursor += 1;
             }
-            if cursor < section_size {
-                if let Ok(string) = std::str::from_utf8(&data_copy[start..cursor]) {
-                    if !string.is_empty() {
-                        for pattern in &patterns {
-                            if let Some(match_) = pattern.find(string) {
-                                let match_start = start + match_.start();
-                                let match_end = start + match_.end();
 
-                                data_copy[match_start..match_end].fill(b' ');
-                                break;
-                            }
-                        }
+            if cursor < section_size
+                && let Ok(string) = std::str::from_utf8(&data_copy[start..cursor])
+                && !string.is_empty()
+            {
+                for pattern in &patterns {
+                    if let Some(match_) = pattern.find(string) {
+                        let match_start = start + match_.start();
+                        let match_end = start + match_.end();
+
+                        data_copy[match_start..match_end].fill(b' ');
+                        break;
                     }
                 }
             }

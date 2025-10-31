@@ -9,6 +9,7 @@ use regex::Regex;
 
 use crate::obfus::ObfuscatorMem;
 
+#[derive(Default)]
 pub struct ElfObfuscator {
     class: bool,
     endian: bool,
@@ -37,17 +38,7 @@ struct ElfObfuscationEraseSectionString {
 
 impl ElfObfuscator {
     pub fn new() -> Self {
-        Self {
-            class: false,
-            endian: false,
-            sechdr: false,
-            symbol: false,
-            comment: false,
-            section: None,
-            got: None,
-            encrypt: None,
-            erase_section_string: None,
-        }
+        Self::default()
     }
 }
 
@@ -142,7 +133,7 @@ impl ElfObfuscator {
     }
 
     /// Obfuscate the ELF
-    pub fn obfuscate<'a>(self, input: &'a mut [u8]) -> Result<()> {
+    pub fn obfuscate(self, input: &mut [u8]) -> Result<()> {
         let mut obfuscator = ObfuscatorMem::new(input)?;
 
         if self.class {
@@ -166,11 +157,12 @@ impl ElfObfuscator {
         if let Some(got) = &self.got {
             obfuscator.got_overwrite(&got.lib_func, &got.new_func)?;
         }
-        if let Some(encrypt) = &self.encrypt {
-            if !obfuscator.encrypt_function_name(&encrypt.func, &encrypt.key)? {
-                return Err(Error::FunctionNotFound);
-            }
+        if let Some(encrypt) = &self.encrypt
+            && !obfuscator.encrypt_function_name(&encrypt.func, &encrypt.key)?
+        {
+            return Err(Error::FunctionNotFound);
         }
+
         if let Some(section_strings) = &self.erase_section_string {
             let section_strings_pattern = section_strings
                 .patterns
@@ -185,7 +177,7 @@ impl ElfObfuscator {
                 .collect::<HashMap<_, _>>();
 
             for (section, patterns) in section_strings_pattern {
-                obfuscator.erase_section_strings(&section, patterns)?;
+                obfuscator.erase_section_strings(section, patterns)?;
             }
         }
         Ok(())

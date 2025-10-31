@@ -75,7 +75,7 @@ impl<'a> ObfuscatorMem<'a> {
     }
 
     fn is_64bit(&self) -> bool {
-        self.buffer[4] == 2
+        self.buffer[elf::EI_CLASS] == elf::ELFCLASS64
     }
     fn is_enable_pie(&self) -> bool {
         self.buffer[16] != 2
@@ -124,11 +124,11 @@ impl<'a> ObfuscatorMem<'a> {
     }
 
     pub fn change_class(&mut self) -> crate::error::Result<()> {
-        self.buffer[4] = 3 - self.buffer[4];
+        self.buffer[elf::EI_CLASS] = 3 - self.buffer[elf::EI_CLASS];
         Ok(())
     }
     pub fn change_endian(&mut self) -> crate::error::Result<()> {
-        self.buffer[5] = 3 - self.buffer[5];
+        self.buffer[elf::EI_DATA] = 3 - self.buffer[elf::EI_DATA];
         Ok(())
     }
     pub fn nullify_sec_hdr(&mut self) -> crate::error::Result<()> {
@@ -225,7 +225,12 @@ impl<'a> ObfuscatorMem<'a> {
         Err(crate::error::Error::Obfuscation("failed to overwrite GOT"))
     }
 
-    pub fn encrypt_function_name(&mut self, function: &str, key: &str) -> crate::error::Result<()> {
+    #[must_use]
+    pub fn encrypt_function_name(
+        &mut self,
+        function: &str,
+        key: &str,
+    ) -> crate::error::Result<bool> {
         use sha2::digest::Digest;
         use std::io::Write;
 
@@ -238,7 +243,9 @@ impl<'a> ObfuscatorMem<'a> {
             .write_all(function.as_bytes())
             .map_err(crate::error::Error::Io)?;
 
-        let idx = self.string_table.find(function).unwrap();
+        let Some(idx) = self.string_table.find(function) else {
+            return Ok(false);
+        };
         let (section_addr, _, _, _) = self.get_section(".strtab").unwrap();
 
         if function.len() > encrypted_function_name.len() {
@@ -251,6 +258,6 @@ impl<'a> ObfuscatorMem<'a> {
         self.buffer[section_addr + idx..section_addr + idx + function.len()]
             .copy_from_slice(&encrypted_function_name);
 
-        Ok(())
+        Ok(true)
     }
 }

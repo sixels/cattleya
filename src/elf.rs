@@ -1,5 +1,15 @@
 pub const HEADER_MAGIC: [u8; 4] = [0x7f, 0x45, 0x4c, 0x46];
 
+pub use constants::*;
+
+#[allow(dead_code)]
+mod constants {
+    pub const EI_CLASS: usize = 4;
+    pub const EI_DATA: usize = 5;
+    pub const ELFCLASS32: u8 = 1;
+    pub const ELFCLASS64: u8 = 2;
+}
+
 #[repr(C, packed)]
 #[derive(Debug)]
 pub struct ElfHeader {

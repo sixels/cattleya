@@ -2,7 +2,10 @@ mod elf;
 mod error;
 mod obfus;
 
+use std::collections::HashMap;
+
 pub use error::{Error, Result};
+use regex::Regex;
 
 use crate::obfus::ObfuscatorMem;
 
@@ -15,6 +18,7 @@ pub struct ElfObfuscator {
     section: Option<String>,
     got: Option<ElfObfuscationGotOverwrite>,
     encrypt: Option<ElfObfuscationEncryptFunction>,
+    erase_section_string: Option<ElfObfuscationEraseSectionString>,
 }
 
 struct ElfObfuscationEncryptFunction {
@@ -25,6 +29,10 @@ struct ElfObfuscationEncryptFunction {
 struct ElfObfuscationGotOverwrite {
     lib_func: String,
     new_func: String,
+}
+
+struct ElfObfuscationEraseSectionString {
+    patterns: HashMap<String, Vec<String>>,
 }
 
 impl ElfObfuscator {
@@ -38,6 +46,7 @@ impl ElfObfuscator {
             section: None,
             got: None,
             encrypt: None,
+            erase_section_string: None,
         }
     }
 }
@@ -100,6 +109,38 @@ impl ElfObfuscator {
         self
     }
 
+    /// Erase strings that match the given patterns in the given section
+    pub fn erase_section_string<I, S>(
+        mut self,
+        section_name: impl Into<String>,
+        patterns: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut section_name = section_name.into();
+
+        let section_strings =
+            self.erase_section_string
+                .get_or_insert_with(|| ElfObfuscationEraseSectionString {
+                    patterns: HashMap::new(),
+                });
+
+        if section_name.chars().next().is_some_and(|c| c != '.') {
+            section_name = format!(".{section_name}");
+        }
+
+        let patterns = patterns.into_iter();
+        section_strings
+            .patterns
+            .entry(section_name)
+            .or_insert_with(|| Vec::with_capacity(patterns.size_hint().1.unwrap_or(0)))
+            .extend(patterns.map(|s: S| s.as_ref().to_owned()));
+
+        self
+    }
+
     /// Obfuscate the ELF
     pub fn obfuscate<'a>(self, input: &'a mut [u8]) -> Result<()> {
         let mut obfuscator = ObfuscatorMem::new(input)?;
@@ -128,6 +169,23 @@ impl ElfObfuscator {
         if let Some(encrypt) = &self.encrypt {
             if !obfuscator.encrypt_function_name(&encrypt.func, &encrypt.key)? {
                 return Err(Error::FunctionNotFound);
+            }
+        }
+        if let Some(section_strings) = &self.erase_section_string {
+            let section_strings_pattern = section_strings
+                .patterns
+                .iter()
+                .map(|(section, patterns)| {
+                    let regex_patterns = patterns
+                        .iter()
+                        .map(|pattern| Regex::new(pattern).unwrap())
+                        .collect::<Vec<_>>();
+                    (section, regex_patterns)
+                })
+                .collect::<HashMap<_, _>>();
+
+            for (section, patterns) in section_strings_pattern {
+                obfuscator.erase_section_strings(&section, patterns)?;
             }
         }
         Ok(())
@@ -301,7 +359,58 @@ mod tests {
         for sym in elf.dynsyms.iter() {
             let name = elf.dynstrtab.get_at(sym.st_name as usize).unwrap();
             if name.starts_with("__libc_start_main") {
-                println!("{}", name);
+                panic!("function not encrypted");
+            }
+        }
+    }
+
+    #[test]
+    fn test_erase_section_string() {
+        let mut input: Vec<u8> = std::fs::read(SAMPLE_ELF).unwrap();
+
+        ElfObfuscator::new()
+            .erase_section_string(".rodata", ["Copyright"])
+            .erase_section_string(".dynstr", [".*_start_main"])
+            .obfuscate(&mut input)
+            .unwrap();
+
+        let elf = goblin::elf::Elf::parse(&input).unwrap();
+
+        let rodata_section = elf
+            .section_headers
+            .iter()
+            .find(|section| {
+                elf.shdr_strtab
+                    .get_at(section.sh_name as usize)
+                    .is_some_and(|s| s == ".rodata")
+            })
+            .unwrap();
+
+        let mut start = 0;
+        let section_size = rodata_section.sh_size as usize;
+        let data_copy = &input[rodata_section.sh_offset as usize..];
+
+        while start < section_size {
+            let mut cursor = start;
+            while cursor < section_size && data_copy[cursor] != 0 {
+                cursor += 1;
+            }
+            if cursor < section_size {
+                if let Ok(string) = std::str::from_utf8(&data_copy[start..cursor]) {
+                    if !string.is_empty() {
+                        if string.contains("Copyright") {
+                            panic!("string not erased");
+                        }
+                    }
+                }
+            }
+            start = cursor + 1;
+        }
+
+        for dynsym in elf.dynsyms.iter() {
+            let name = elf.dynstrtab.get_at(dynsym.st_name as usize).unwrap();
+            if name.contains("__libc_start_main") {
+                panic!("__libc_start_main not erased");
             }
         }
     }

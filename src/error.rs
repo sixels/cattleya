@@ -29,6 +29,9 @@ pub enum Error {
 
     #[error("function not found")]
     FunctionNotFound,
+
+    #[error("section not found: {0}")]
+    SectionNotFound(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

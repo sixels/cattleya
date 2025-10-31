@@ -1,3 +1,5 @@
+use regex::Regex;
+
 use crate::elf::{self, ElfHeader};
 
 pub struct ObfuscatorMem<'a> {
@@ -92,7 +94,7 @@ impl<'a> ObfuscatorMem<'a> {
     fn get_section(&self, section: &str) -> crate::error::Result<(usize, usize, usize, usize)> {
         let searched_idx = self.sec_hdr.find(section).unwrap_or(usize::MAX);
         if searched_idx == usize::MAX {
-            return Err(crate::error::Error::InvalidOption("section not found"));
+            return Err(crate::error::Error::SectionNotFound(section.to_owned()));
         }
         for i in 0..self.elf_hdr.e_shnum as u64 {
             let sec_hdr = self.buffer[(self.sec_table + i * self.elf_hdr.e_shentsize as u64)
@@ -118,9 +120,7 @@ impl<'a> ObfuscatorMem<'a> {
                 }
             }
         }
-        Err(crate::error::Error::NotFound(
-            "section not found".to_owned() + section,
-        ))
+        Err(crate::error::Error::SectionNotFound(section.to_owned()))
     }
 
     pub fn change_class(&mut self) -> crate::error::Result<()> {
@@ -225,7 +225,6 @@ impl<'a> ObfuscatorMem<'a> {
         Err(crate::error::Error::Obfuscation("failed to overwrite GOT"))
     }
 
-    #[must_use]
     pub fn encrypt_function_name(
         &mut self,
         function: &str,
@@ -259,5 +258,52 @@ impl<'a> ObfuscatorMem<'a> {
             .copy_from_slice(&encrypted_function_name);
 
         Ok(true)
+    }
+
+    pub fn erase_section_strings<I>(
+        &mut self,
+        section: &str,
+        patterns: I,
+    ) -> crate::error::Result<()>
+    where
+        I: IntoIterator<Item = Regex>,
+    {
+        let (section_addr, section_size, _, _) = self.get_section(section)?;
+        let mut data_copy: Vec<u8> = vec![0; section_size];
+        data_copy.copy_from_slice(&self.buffer[section_addr..section_addr + section_size]);
+
+        // search for strings in the following way:
+        // 1. find all null terminated strings
+        // 2. check if they are valid utf-8
+        // 3. check if they match the pattern
+        // 4. if they match, replace the matched string with space bytes
+        println!("erasing section {} strings", section);
+        let patterns = patterns.into_iter().collect::<Vec<_>>();
+        let mut start = 0;
+        while start < section_size {
+            let mut cursor = start;
+            while cursor < section_size && data_copy[cursor] != 0 {
+                cursor += 1;
+            }
+            if cursor < section_size {
+                if let Ok(string) = std::str::from_utf8(&data_copy[start..cursor]) {
+                    if !string.is_empty() {
+                        for pattern in &patterns {
+                            if let Some(match_) = pattern.find(string) {
+                                let match_start = start + match_.start();
+                                let match_end = start + match_.end();
+
+                                data_copy[match_start..match_end].fill(b' ');
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            start = cursor + 1;
+        }
+
+        self.buffer[section_addr..section_addr + section_size].copy_from_slice(&data_copy);
+        Ok(())
     }
 }

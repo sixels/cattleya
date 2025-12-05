@@ -362,7 +362,7 @@ mod tests {
 
         ElfObfuscator::new()
             .erase_section_string(".rodata", ["Copyright"])
-            .erase_section_string(".dynstr", [".*_start_main"])
+            .erase_section_string(".dynstr", ["Copyright", ".*_start_main"])
             .obfuscate(&mut input)
             .unwrap();
 

@@ -1,6 +1,5 @@
-use regex::Regex;
-
 use crate::elf::{self, ElfHeader};
+use regex::Regex;
 
 pub struct ObfuscatorMem<'a> {
     buffer: &'a mut [u8],
@@ -17,25 +16,52 @@ impl<'a> ObfuscatorMem<'a> {
             return Err(crate::error::Error::InvalidMagic);
         }
 
-        let elf_hdr: ElfHeader = unsafe { std::ptr::read(input.as_ptr() as *const ElfHeader) };
+        let arch = input[elf::EI_CLASS];
+        if arch != elf::ELFCLASS32 && arch != elf::ELFCLASS64 {
+            return Err(crate::error::Error::InvalidArch(arch));
+        }
 
-        let sec_table = match input[4] == 2 {
-            true => u64::from_le_bytes(input[40..48].try_into().unwrap()),
-            false => u32::from_le_bytes(input[32..36].try_into().unwrap()) as u64,
+        let is_64 = arch == elf::ELFCLASS64;
+
+        // Parsing the Header
+        let elf_hdr: ElfHeader = if is_64 {
+            unsafe { std::ptr::read(input.as_ptr() as *const ElfHeader) }
+        } else {
+            let elf32_hdr: elf::Elf32Header =
+                unsafe { std::ptr::read(input.as_ptr() as *const elf::Elf32Header) };
+            ElfHeader::from_elf32(&elf32_hdr)
         };
 
-        let sh_table_header_addr = (u16::from_le_bytes(input[62..64].try_into().unwrap()) as u64
-            * (elf_hdr.e_shentsize as u64)
-            + sec_table) as usize;
+        // Determine Section Header Table Offset (e_shoff)
+        let sec_table = if is_64 {
+            u64::from_le_bytes(input[40..48].try_into().unwrap())
+        } else {
+            u32::from_le_bytes(input[32..36].try_into().unwrap()) as u64
+        };
+
+        // 64-bit e_shstrndx is at 0x3E, 32-bit is at 0x32. The struct abstraction handles this.
+        let sh_str_ndx = elf_hdr.e_shstrndx as u64;
+
+        // Calculate address of the Section Header for the String Table
+        let sh_table_header_addr = (sec_table + (sh_str_ndx * elf_hdr.e_shentsize as u64)) as usize;
         let sh_table_header =
             &input[sh_table_header_addr..sh_table_header_addr + elf_hdr.e_shentsize as usize];
-        let sh_table_addr =
-            u64::from_le_bytes(sh_table_header[24..32].try_into().unwrap()) as usize;
 
+        // 64-bit: sh_offset is at 0x18 (24), size 8
+        // 32-bit: sh_offset is at 0x10 (16), size 4
+        let sh_table_addr = if is_64 {
+            u64::from_le_bytes(sh_table_header[24..32].try_into().unwrap()) as usize
+        } else {
+            u32::from_le_bytes(sh_table_header[16..20].try_into().unwrap()) as usize
+        };
+
+        // Locate the end of the strings (scan for null bytes manually?)
         let mut curr_strings = -1;
         let mut index = sh_table_addr;
         let mut curr_byte;
-        while curr_strings < elf_hdr.e_shnum as isize {
+
+        // Safety check to prevent OOB if file is malformed
+        while index < input.len() && curr_strings < elf_hdr.e_shnum as isize {
             curr_byte = input[index] as isize;
             if curr_byte == 0 {
                 curr_strings += 1;
@@ -61,11 +87,14 @@ impl<'a> ObfuscatorMem<'a> {
             string_table: String::new(),
         };
 
-        let (section_addr, section_size, _, _) = obfus.get_section(".dynstr").unwrap();
-        obfus.dyn_strings =
-            String::from_utf8_lossy(&obfus.buffer[section_addr..section_addr + section_size])
-                .to_string();
+        // Load .dynstr
+        if let Ok((section_addr, section_size, _, _)) = obfus.get_section(".dynstr") {
+            obfus.dyn_strings =
+                String::from_utf8_lossy(&obfus.buffer[section_addr..section_addr + section_size])
+                    .to_string();
+        }
 
+        // Load .strtab
         let (section_addr, section_size, _, _) =
             obfus.get_section(".strtab").unwrap_or((0, 0, 0, 0));
         if section_addr != 0 && section_size != 0 {
@@ -97,25 +126,24 @@ impl<'a> ObfuscatorMem<'a> {
             return Err(crate::error::Error::SectionNotFound(section.to_owned()));
         }
         for i in 0..self.elf_hdr.e_shnum as u64 {
-            let sec_hdr = self.buffer[(self.sec_table + i * self.elf_hdr.e_shentsize as u64)
-                as usize
-                ..(self.sec_table + (i + 1) * self.elf_hdr.e_shentsize as u64) as usize]
-                .to_vec();
+            let offset = (self.sec_table + i * self.elf_hdr.e_shentsize as u64) as usize;
+            let sec_hdr = &self.buffer[offset..offset + self.elf_hdr.e_shentsize as usize];
+
             let string_offset = u32::from_le_bytes(sec_hdr[0..4].try_into().unwrap());
             if string_offset == searched_idx as u32 {
                 if self.is_64bit() {
                     return Ok((
-                        u64::from_le_bytes(sec_hdr[24..32].try_into().unwrap()) as usize,
-                        u64::from_le_bytes(sec_hdr[32..40].try_into().unwrap()) as usize,
-                        u64::from_le_bytes(sec_hdr[56..64].try_into().unwrap()) as usize,
-                        u64::from_le_bytes(sec_hdr[16..24].try_into().unwrap()) as usize,
+                        u64::from_le_bytes(sec_hdr[24..32].try_into().unwrap()) as usize, // sh_offset
+                        u64::from_le_bytes(sec_hdr[32..40].try_into().unwrap()) as usize, // sh_size
+                        u64::from_le_bytes(sec_hdr[56..64].try_into().unwrap()) as usize, // sh_entsize
+                        u64::from_le_bytes(sec_hdr[16..24].try_into().unwrap()) as usize, // sh_addr
                     ));
                 } else {
                     return Ok((
-                        u32::from_le_bytes(sec_hdr[16..20].try_into().unwrap()) as usize,
-                        u32::from_le_bytes(sec_hdr[20..24].try_into().unwrap()) as usize,
-                        u32::from_le_bytes(sec_hdr[36..40].try_into().unwrap()) as usize,
-                        u32::from_le_bytes(sec_hdr[12..16].try_into().unwrap()) as usize,
+                        u32::from_le_bytes(sec_hdr[16..20].try_into().unwrap()) as usize, // sh_offset
+                        u32::from_le_bytes(sec_hdr[20..24].try_into().unwrap()) as usize, // sh_size
+                        u32::from_le_bytes(sec_hdr[36..40].try_into().unwrap()) as usize, // sh_entsize
+                        u32::from_le_bytes(sec_hdr[12..16].try_into().unwrap()) as usize, // sh_addr
                     ));
                 }
             }
@@ -177,6 +205,7 @@ impl<'a> ObfuscatorMem<'a> {
             "function not found".to_owned() + function,
         ))
     }
+
     pub fn got_overwrite(
         &mut self,
         target_function_name: &str,
@@ -192,32 +221,42 @@ impl<'a> ObfuscatorMem<'a> {
             ));
         }
         let dyn_func = self.get_dyn_func_idx(target_function_name)?;
+
         if self.is_64bit() {
             let (section_addr, section_size, entry_size, _) =
                 self.get_section(".rela.plt").unwrap();
+
             for i in 0..section_size / entry_size {
                 let entry = &self.buffer[section_addr..section_addr + section_size]
                     [i * entry_size..(i + 1) * entry_size];
+
+                // Elf64_Rela: r_offset(8) + r_info(8) + r_addend(8)
                 if u64::from_le_bytes(entry[8..16].try_into().unwrap()) >> 32 == dyn_func {
                     let offset = u64::from_le_bytes(entry[0..8].try_into().unwrap());
                     let addr = self.v2p(offset as usize, ".got.plt");
-                    let new_func_addr = self.get_func_addr_by_name(new_func_name);
-                    self.buffer[addr..addr + 8]
-                        .copy_from_slice(&new_func_addr.unwrap().to_le_bytes());
+                    let new_func_addr = self.get_func_addr_by_name(new_func_name)?;
+                    self.buffer[addr..addr + 8].copy_from_slice(&new_func_addr.to_le_bytes());
                     return Ok(());
                 }
             }
         } else {
             let (section_addr, section_size, entry_size, _) = self.get_section(".rel.plt").unwrap();
+
             for i in 0..section_size / entry_size {
                 let entry = &self.buffer[section_addr..section_addr + section_size]
                     [i * entry_size..(i + 1) * entry_size];
-                if (u32::from_le_bytes(entry[8..16].try_into().unwrap()) >> 8) as u64 == dyn_func {
+
+                // Elf32_Rel: r_offset(4) + r_info(4)
+                // The info is at offset 4
+                let r_info = u32::from_le_bytes(entry[4..8].try_into().unwrap());
+
+                if (r_info >> 8) as u64 == dyn_func {
                     let offset = u32::from_le_bytes(entry[0..4].try_into().unwrap());
                     let addr = self.v2p(offset as usize, ".got.plt");
-                    let new_func_addr = self.get_func_addr_by_name(new_func_name);
+                    let new_func_addr = self.get_func_addr_by_name(new_func_name)?;
+                    // Write 4 bytes for 32-bit address
                     self.buffer[addr..addr + 4]
-                        .copy_from_slice(&new_func_addr.unwrap().to_le_bytes());
+                        .copy_from_slice(&(new_func_addr as u32).to_le_bytes());
                     return Ok(());
                 }
             }
@@ -272,12 +311,6 @@ impl<'a> ObfuscatorMem<'a> {
         let mut data_copy: Vec<u8> = vec![0; section_size];
         data_copy.copy_from_slice(&self.buffer[section_addr..section_addr + section_size]);
 
-        // search for strings in the following way:
-        // 1. find all null terminated strings
-        // 2. check if they are valid utf-8
-        // 3. check if they match the pattern
-        // 4. if they match, replace the matched string with space bytes
-        println!("erasing section {} strings", section);
         let patterns = patterns.into_iter().collect::<Vec<_>>();
         let mut start = 0;
         while start < section_size {

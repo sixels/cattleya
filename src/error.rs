@@ -32,6 +32,9 @@ pub enum Error {
 
     #[error("section not found: {0}")]
     SectionNotFound(String),
+
+    #[error("invalid architecture: {0}")]
+    InvalidArch(u8),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

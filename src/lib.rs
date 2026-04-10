@@ -16,7 +16,7 @@ pub struct ElfObfuscator {
     sechdr: bool,
     symbol: bool,
     comment: bool,
-    section: Option<String>,
+    section: Vec<String>,
     got: Option<ElfObfuscationGotOverwrite>,
     encrypt: Option<ElfObfuscationEncryptFunction>,
     erase_section_string: Option<ElfObfuscationEraseSectionString>,
@@ -70,7 +70,7 @@ impl ElfObfuscator {
     }
     /// Nullify section in the ELF
     pub fn nullify_section(mut self, name: impl Into<String>) -> Self {
-        self.section = Some(name.into());
+        self.section.push(name.into());
         self
     }
 
@@ -151,7 +151,7 @@ impl ElfObfuscator {
         if self.comment {
             obfuscator.nullify_section(".comment")?;
         }
-        if let Some(section) = &self.section {
+        for section in &self.section {
             obfuscator.nullify_section(section)?;
         }
         if let Some(got) = &self.got {
@@ -180,6 +180,7 @@ impl ElfObfuscator {
                 obfuscator.erase_section_strings(section, patterns)?;
             }
         }
+
         Ok(())
     }
 }

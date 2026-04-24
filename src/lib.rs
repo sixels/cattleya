@@ -152,7 +152,10 @@ impl ElfObfuscator {
             obfuscator.nullify_section(".comment")?;
         }
         for section in &self.section {
-            obfuscator.nullify_section(section)?;
+            if let Err(e) = obfuscator.nullify_section(section) {
+                // TODO: return multiple errors
+                continue;
+            }
         }
         if let Some(got) = &self.got {
             obfuscator.got_overwrite(&got.lib_func, &got.new_func)?;
@@ -177,7 +180,10 @@ impl ElfObfuscator {
                 .collect::<HashMap<_, _>>();
 
             for (section, patterns) in section_strings_pattern {
-                obfuscator.erase_section_strings(section, patterns)?;
+                if let Err(e) = obfuscator.erase_section_strings(section, patterns) {
+                    // TODO: return multiple errors
+                    continue;
+                }
             }
         }
 

@@ -137,19 +137,19 @@ impl ElfObfuscator {
         let mut obfuscator = ObfuscatorMem::new(input)?;
 
         if self.class {
-            obfuscator.change_class()?;
+            obfuscator.change_class().ok();
         }
         if self.endian {
-            obfuscator.change_endian()?;
+            obfuscator.change_endian().ok();
         }
         if self.sechdr {
-            obfuscator.nullify_sec_hdr()?;
+            obfuscator.nullify_sec_hdr().ok();
         }
         if self.symbol {
-            obfuscator.nullify_section(".strtab")?;
+            obfuscator.nullify_section(".strtab").ok();
         }
         if self.comment {
-            obfuscator.nullify_section(".comment")?;
+            obfuscator.nullify_section(".comment").ok();
         }
         for section in &self.section {
             if let Err(e) = obfuscator.nullify_section(section) {
